@@ -49,7 +49,7 @@ func main() {
     client := lokiclient.NewClient("http://loki:3100/loki/api/v1/push")
     
     stream := lokiclient.NewStream("myapp", "module1", "function1", "trace123")
-    value := lokiclient.NewValue("This is a log message", "key1", "value1")
+    value := lokiclient.NewValue("This is a log message", "item1", "item2")
     
     client.Info(stream, value)
     
