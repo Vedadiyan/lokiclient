@@ -132,6 +132,7 @@ func newEntry(stream Stream, value Value) *Entry {
 
 func NewClient(addr string, options ...WriterOption) *Client {
 	config := new(ClientConfig)
+	config.LogLevel = InfoLevel
 	config.BatchSize = 1
 	config.ChannelBufferSize = config.BatchSize * 5
 	config.HttpTimeout = 30 * time.Second
