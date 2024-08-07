@@ -44,6 +44,7 @@ type (
 		notify     chan bool
 		wg         sync.WaitGroup
 		closed     bool
+		syncing    bool
 	}
 	WriterOption func(*ClientConfig)
 	LogLevel     int
@@ -174,7 +175,7 @@ func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
 
 	select {
 	case c.in <- e:
-		if len(c.in) >= c.config.MinBatchSize {
+		if !c.syncing && len(c.in) >= c.config.MinBatchSize {
 			select {
 			case c.notify <- true:
 			default:
@@ -273,6 +274,7 @@ func (c *Client) syncWorker(ctx context.Context) {
 	}
 
 	flush := func() {
+		c.syncing = true
 		buffer := make([]*Entry, 0)
 		len := len(c.in)
 		for i := 0; i < len; i++ {
@@ -285,6 +287,7 @@ func (c *Client) syncWorker(ctx context.Context) {
 		if err := c.Write(ctx, grouped); err != nil {
 			log.Printf("Failed to write entries: %v", err)
 		}
+		c.syncing = false
 	}
 
 	for {
