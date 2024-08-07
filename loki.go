@@ -35,16 +35,16 @@ type (
 		LogLevel          LogLevel
 		HttpTimeout       time.Duration
 		Fallbacks         []Logger
+		HttpClient        *http.Client
 	}
 	Client struct {
-		addr       string
-		config     ClientConfig
-		httpClient *http.Client
-		in         chan *Entry
-		notify     chan bool
-		wg         sync.WaitGroup
-		mut        sync.Mutex
-		drain      bool
+		addr   string
+		config ClientConfig
+		in     chan *Entry
+		notify chan bool
+		wg     sync.WaitGroup
+		mut    sync.Mutex
+		drain  bool
 	}
 	WriterOption func(*ClientConfig)
 	LogLevel     int
@@ -108,6 +108,12 @@ func WithHttpTimeout(timeout time.Duration) WriterOption {
 	}
 }
 
+func WithHttpClient(client *http.Client) WriterOption {
+	return func(c *ClientConfig) {
+		c.HttpClient = client
+	}
+}
+
 func NewStream(app, module, function, traceId string) Stream {
 	return Stream{
 		"app":     app,
@@ -137,26 +143,21 @@ func NewClient(addr string, options ...WriterOption) *Client {
 	config.LogLevel = INFO
 	config.MinBatchSize = 1
 	config.ChannelBufferSize = config.MinBatchSize * 5
+	config.HttpClient = http.DefaultClient
 	config.HttpTimeout = 30 * time.Second
+	config.HttpClient.Timeout = config.HttpTimeout
 	config.Fallbacks = make([]Logger, 0)
 	for _, option := range options {
 		option(config)
 	}
 
 	c := &Client{
-		addr: addr,
-		httpClient: &http.Client{
-			Timeout: config.HttpTimeout,
-		},
+		addr:   addr,
 		in:     make(chan *Entry, config.ChannelBufferSize),
 		notify: make(chan bool, 100),
 	}
 
 	return c
-}
-
-func (c *Client) SetHttpClient(client *http.Client) {
-	c.httpClient = client
 }
 
 func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
@@ -244,7 +245,7 @@ func (c *Client) send(ctx context.Context, entries []*Entry) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	res, err := c.httpClient.Do(req)
+	res, err := c.config.HttpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
