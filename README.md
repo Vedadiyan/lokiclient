@@ -169,7 +169,7 @@ The client provides methods for different log levels:
 Example:
 
 ```go
-client.Info(context.Background(), stream, lokiclient.NewValue("User logged in", "userId", 12345))
+client.Info(context.Background(), stream, "log message")
 ```
 
 ## Synchronization
@@ -228,9 +228,9 @@ You can manually write entries using the `Write` method:
 entries := []*lokiclient.Entry{
     {
         Stream: stream,
-        Values: []lokiclient.Value{
-            lokiclient.NewValue(time.Now().UnixNano(), "INFO", "Message 1"),
-            lokiclient.NewValue(time.Now().UnixNano(), "ERROR", "Message 2"),
+        Values: [][]lokiclient.Value{
+            {fmt.Sprintf("%d", time.Now().UnixNano()), "Message 1"},
+            {fmt.Sprintf("%d", time.Now().UnixNano()), "Message 2"},
         },
     },
 }
