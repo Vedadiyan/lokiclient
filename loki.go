@@ -43,8 +43,8 @@ type (
 		in         chan *Entry
 		notify     chan bool
 		wg         sync.WaitGroup
+		mut        sync.Mutex
 		closed     bool
-		syncing    bool
 	}
 	WriterOption func(*ClientConfig)
 	LogLevel     int
@@ -175,7 +175,7 @@ func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
 
 	select {
 	case c.in <- e:
-		if !c.syncing && len(c.in) >= c.config.MinBatchSize {
+		if len(c.in) >= c.config.MinBatchSize {
 			select {
 			case c.notify <- true:
 			default:
@@ -272,25 +272,22 @@ func (c *Client) syncWorker(ctx context.Context) {
 		tick = ticker.C
 		defer ticker.Stop()
 	}
-
 	flush := func() {
-		if c.syncing {
-			return
+		c.mut.Lock()
+		defer c.mut.Unlock()
+		if len := len(c.in); len != 0 {
+			buffer := make([]*Entry, 0)
+			for i := 0; i < len; i++ {
+				buffer = append(buffer, readOrReturn(c.in))
+			}
+			grouped, err := Group(buffer)
+			if err != nil {
+				log.Printf("Error grouping entries: %v", err)
+			}
+			if err := c.Write(ctx, grouped); err != nil {
+				log.Printf("Failed to write entries: %v", err)
+			}
 		}
-		c.syncing = true
-		buffer := make([]*Entry, 0)
-		len := len(c.in)
-		for i := 0; i < len; i++ {
-			buffer = append(buffer, readOrReturn(c.in))
-		}
-		grouped, err := Group(buffer)
-		if err != nil {
-			log.Printf("Error grouping entries: %v", err)
-		}
-		if err := c.Write(ctx, grouped); err != nil {
-			log.Printf("Failed to write entries: %v", err)
-		}
-		c.syncing = false
 	}
 
 	for {
