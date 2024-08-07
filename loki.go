@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -136,12 +137,18 @@ func (c *Client) Write(e []*Entry) error {
 			<-time.After(c.retryInterval)
 			continue
 		}
+		if errs != nil {
+			consoleWarning(errs.Error())
+		}
 		return nil
 	}
 	for _, fallback := range c.fallbacks {
 		if err := fallback.Write(e); err != nil {
 			errs = errors.Join(err)
 			continue
+		}
+		if errs != nil {
+			consoleWarning(errs.Error())
 		}
 		return nil
 	}
@@ -274,4 +281,8 @@ func Group(entries []*Entry) []*Entry {
 		out[n].Values = append(out[n].Values, entry.Values...)
 	}
 	return out
+}
+
+func consoleWarning(msg string) {
+	log.Println("\033[31m", "WARNING:", msg, "\033[0m")
 }
