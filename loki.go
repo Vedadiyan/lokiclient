@@ -147,6 +147,7 @@ func NewClient(addr string, options ...WriterOption) *Client {
 	config.HttpTimeout = 30 * time.Second
 	config.HttpClient.Timeout = config.HttpTimeout
 	config.Fallbacks = make([]Logger, 0)
+
 	for _, option := range options {
 		option(config)
 	}
