@@ -29,7 +29,7 @@ type (
 	ClientConfig struct {
 		MaxRetries        int
 		RetryInterval     time.Duration
-		BatchSize         int
+		MinBatchSize      int
 		SyncInterval      time.Duration
 		ChannelBufferSize int
 		LogLevel          LogLevel
@@ -76,9 +76,9 @@ func WithRetry(max int, pause time.Duration) WriterOption {
 	}
 }
 
-func WithBatchSync(batchSize int, interval time.Duration) WriterOption {
+func WithBatchSync(minBatchSize int, interval time.Duration) WriterOption {
 	return func(c *ClientConfig) {
-		c.BatchSize = batchSize
+		c.MinBatchSize = minBatchSize
 		c.SyncInterval = interval
 	}
 }
@@ -134,8 +134,8 @@ func newEntry(stream Stream, value Value) *Entry {
 func NewClient(addr string, options ...WriterOption) *Client {
 	config := new(ClientConfig)
 	config.LogLevel = InfoLevel
-	config.BatchSize = 1
-	config.ChannelBufferSize = config.BatchSize * 5
+	config.MinBatchSize = 1
+	config.ChannelBufferSize = config.MinBatchSize * 5
 	config.HttpTimeout = 30 * time.Second
 	config.Fallbacks = make([]Logger, 0)
 	for _, option := range options {
@@ -174,7 +174,7 @@ func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
 
 	select {
 	case c.in <- e:
-		if len(c.in) >= c.config.BatchSize {
+		if len(c.in) >= c.config.MinBatchSize {
 			select {
 			case c.notify <- true:
 			default:
