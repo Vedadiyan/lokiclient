@@ -41,7 +41,7 @@ package main
 
 import (
     "context"
-    "github.com/yourusername/lokiclient"
+    "github.com/vedadiyan/lokiclient"
     "time"
 )
 
