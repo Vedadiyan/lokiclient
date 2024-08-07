@@ -34,6 +34,7 @@ type (
 		SyncInterval      time.Duration
 		ChannelBufferSize int
 		LogLevel          LogLevel
+		HttpTimeout       time.Duration
 	}
 	Client struct {
 		config     ClientConfig
@@ -41,7 +42,6 @@ type (
 		in         chan *Entry
 		notify     chan bool
 		fallbacks  []Logger
-		mu         sync.Mutex
 		wg         sync.WaitGroup
 	}
 	WriterOption func(*ClientConfig)
@@ -94,6 +94,12 @@ func WithChannelBufferSize(size int) WriterOption {
 	}
 }
 
+func WithHttpTimeout(timeout time.Duration) WriterOption {
+	return func(c *ClientConfig) {
+		c.HttpTimeout = timeout
+	}
+}
+
 func NewStream(app, module, function, traceId string) Stream {
 	return Stream{
 		"app":     app,
@@ -131,32 +137,34 @@ func NewClient(config ClientConfig, options ...WriterOption) *Client {
 		config.ChannelBufferSize = config.BatchSize * 5
 	}
 
+	if config.HttpTimeout == 0 {
+		config.HttpTimeout = 30 * time.Second
+	}
+
 	c := &Client{
-		config:     config,
-		httpClient: &http.Client{},
-		in:         make(chan *Entry, config.ChannelBufferSize),
-		notify:     make(chan bool, 100),
-		fallbacks:  make([]Logger, 0),
+		config: config,
+		httpClient: &http.Client{
+			Timeout: config.HttpTimeout,
+		},
+		in:        make(chan *Entry, config.ChannelBufferSize),
+		notify:    make(chan bool, 100),
+		fallbacks: make([]Logger, 0),
 	}
 
 	return c
 }
 
 func (c *Client) AddFallback(l Logger) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.fallbacks = append(c.fallbacks, l)
 }
 
 func (c *Client) SetHttpClient(client *http.Client) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.httpClient = client
 }
 
-func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) error {
+func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
 	if level < c.config.LogLevel {
-		return nil
+		return
 	}
 
 	values := make(Value, 0, len(v)+2)
@@ -173,40 +181,36 @@ func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) err
 			default:
 			}
 		}
-		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		log.Printf("Context cancelled while logging: %v", ctx.Err())
 	}
 }
 
-func (c *Client) Trace(ctx context.Context, s Stream, v Value) error {
-	return c.log(ctx, TraceLevel, s, v)
+func (c *Client) Trace(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, TraceLevel, s, v)
 }
 
-func (c *Client) Debug(ctx context.Context, s Stream, v Value) error {
-	return c.log(ctx, DebugLevel, s, v)
+func (c *Client) Debug(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, DebugLevel, s, v)
 }
 
-func (c *Client) Info(ctx context.Context, s Stream, v Value) error {
-	return c.log(ctx, InfoLevel, s, v)
+func (c *Client) Info(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, InfoLevel, s, v)
 }
 
-func (c *Client) Warn(ctx context.Context, s Stream, v Value) error {
-	return c.log(ctx, WarnLevel, s, v)
+func (c *Client) Warn(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, WarnLevel, s, v)
 }
 
-func (c *Client) Error(ctx context.Context, s Stream, v Value) error {
-	return c.log(ctx, ErrorLevel, s, v)
+func (c *Client) Error(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, ErrorLevel, s, v)
 }
 
 func (c *Client) Write(ctx context.Context, entries []*Entry) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	var errs error
 	for i := 0; i <= c.config.MaxRetries; i++ {
 		if err := c.send(ctx, entries); err != nil {
-			errs = errors.Join(err)
+			errs = errors.Join(errs, err)
 			select {
 			case <-time.After(c.config.RetryInterval):
 				continue
@@ -219,13 +223,13 @@ func (c *Client) Write(ctx context.Context, entries []*Entry) error {
 
 	for _, fallback := range c.fallbacks {
 		if err := fallback.Write(ctx, entries); err != nil {
-			errs = errors.Join(err)
+			errs = errors.Join(errs, err)
 			continue
 		}
 		return nil
 	}
 
-	return errs
+	return fmt.Errorf("%w: %v", ErrSendFailed, errs)
 }
 
 func (c *Client) send(ctx context.Context, entries []*Entry) error {
@@ -276,7 +280,11 @@ func (c *Client) syncWorker(ctx context.Context) {
 				buffer = append(buffer, e)
 			}
 		}
-		if err := c.Write(ctx, Group(buffer)); err != nil {
+		grouped, err := Group(buffer)
+		if err != nil {
+			log.Printf("Error grouping entries: %v", err)
+		}
+		if err := c.Write(ctx, grouped); err != nil {
 			log.Printf("Failed to write entries: %v", err)
 		}
 	}
@@ -295,24 +303,24 @@ func (c *Client) syncWorker(ctx context.Context) {
 }
 
 func (c *Client) Flush(ctx context.Context) error {
-	c.notify <- true
-	return nil
+	select {
+	case c.notify <- true:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-func (c *Client) Close() error {
-	close(c.in)
-	c.wg.Wait()
-	return nil
-}
-
-func Group(entries []*Entry) []*Entry {
+func Group(entries []*Entry) ([]*Entry, error) {
 	out := make([]*Entry, 0)
 	g := make(map[string]int)
+	var errs error
 	for _, entry := range entries {
 		var buffer bytes.Buffer
 		enc := gob.NewEncoder(&buffer)
 		err := enc.Encode(entry.Stream)
 		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to encode entry: %w", err))
 			continue
 		}
 		key := hex.EncodeToString(buffer.Bytes())
@@ -328,7 +336,7 @@ func Group(entries []*Entry) []*Entry {
 		}
 		out[n].Values = append(out[n].Values, entry.Values...)
 	}
-	return out
+	return out, errs
 }
 
 func (l LogLevel) String() string {
@@ -348,17 +356,11 @@ func (l LogLevel) String() string {
 	}
 }
 
-// Extra non-blocking measure
-// Not really needed, I know
 func readOrReturn(in chan *Entry) *Entry {
 	select {
 	case out := <-in:
-		{
-			return out
-		}
+		return out
 	default:
-		{
-			return nil
-		}
+		return nil
 	}
 }
