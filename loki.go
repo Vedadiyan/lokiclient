@@ -27,7 +27,6 @@ type (
 		Values []Value `json:"values"`
 	}
 	ClientConfig struct {
-		Address           string
 		MaxRetries        int
 		RetryInterval     time.Duration
 		BatchSize         int
@@ -35,13 +34,14 @@ type (
 		ChannelBufferSize int
 		LogLevel          LogLevel
 		HttpTimeout       time.Duration
+		Fallbacks         []Logger
 	}
 	Client struct {
+		addr       string
 		config     ClientConfig
 		httpClient *http.Client
 		in         chan *Entry
 		notify     chan bool
-		fallbacks  []Logger
 		wg         sync.WaitGroup
 	}
 	WriterOption func(*ClientConfig)
@@ -94,6 +94,12 @@ func WithChannelBufferSize(size int) WriterOption {
 	}
 }
 
+func WithFallback(loggers ...Logger) WriterOption {
+	return func(c *ClientConfig) {
+		c.Fallbacks = append(c.Fallbacks, loggers...)
+	}
+}
+
 func WithHttpTimeout(timeout time.Duration) WriterOption {
 	return func(c *ClientConfig) {
 		c.HttpTimeout = timeout
@@ -124,38 +130,26 @@ func newEntry(stream Stream, value Value) *Entry {
 	}
 }
 
-func NewClient(config ClientConfig, options ...WriterOption) *Client {
+func NewClient(addr string, options ...WriterOption) *Client {
+	config := new(ClientConfig)
+	config.BatchSize = 1
+	config.ChannelBufferSize = config.BatchSize * 5
+	config.HttpTimeout = 30 * time.Second
+	config.Fallbacks = make([]Logger, 0)
 	for _, option := range options {
-		option(&config)
-	}
-
-	if config.BatchSize == 0 {
-		config.BatchSize = 1
-	}
-
-	if config.ChannelBufferSize == 0 {
-		config.ChannelBufferSize = config.BatchSize * 5
-	}
-
-	if config.HttpTimeout == 0 {
-		config.HttpTimeout = 30 * time.Second
+		option(config)
 	}
 
 	c := &Client{
-		config: config,
+		addr: addr,
 		httpClient: &http.Client{
 			Timeout: config.HttpTimeout,
 		},
-		in:        make(chan *Entry, config.ChannelBufferSize),
-		notify:    make(chan bool, 100),
-		fallbacks: make([]Logger, 0),
+		in:     make(chan *Entry, config.ChannelBufferSize),
+		notify: make(chan bool, 100),
 	}
 
 	return c
-}
-
-func (c *Client) AddFallback(l Logger) {
-	c.fallbacks = append(c.fallbacks, l)
 }
 
 func (c *Client) SetHttpClient(client *http.Client) {
@@ -221,7 +215,7 @@ func (c *Client) Write(ctx context.Context, entries []*Entry) error {
 		return nil
 	}
 
-	for _, fallback := range c.fallbacks {
+	for _, fallback := range c.config.Fallbacks {
 		if err := fallback.Write(ctx, entries); err != nil {
 			errs = errors.Join(errs, err)
 			continue
@@ -238,7 +232,7 @@ func (c *Client) send(ctx context.Context, entries []*Entry) error {
 		return fmt.Errorf("failed to marshal entries: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.Address, bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.addr, bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
