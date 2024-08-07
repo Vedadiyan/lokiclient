@@ -46,7 +46,7 @@ import (
 )
 
 func main() {
-    client := lokiclient.NewClient("http://loki:3100/loki/api/v1/push")
+    client := lokiclient.NewClient("http://loki:3100")
     
     stream := lokiclient.NewStream("myapp", "module1", "function1", "trace123")
     value := lokiclient.NewValue("This is a log message", "item1", "item2")
@@ -102,7 +102,7 @@ An `Entry` combines a `Stream` and a `Value`. It's the basic unit of data sent t
 Create a new Loki client by specifying the Loki server address:
 
 ```go
-client := lokiclient.NewClient("http://loki:3100/loki/api/v1/push")
+client := lokiclient.NewClient("http://loki:3100")
 ```
 
 ### Client Options
@@ -174,7 +174,7 @@ The client supports batching of log entries for improved performance. When batch
 To enable batching:
 
 ```go
-client := lokiclient.NewClient("http://loki:3100/loki/api/v1/push", client.WithBatchSync(100, 5*time.Second))
+client := lokiclient.NewClient("http://loki:3100", client.WithBatchSync(100, 5*time.Second))
 ```
 
 ## Error Handling and Retries
