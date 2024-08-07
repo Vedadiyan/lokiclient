@@ -272,45 +272,38 @@ func (c *Client) syncWorker(ctx context.Context) {
 		tick = ticker.C
 		defer ticker.Stop()
 	}
-	flush := func() {
-		c.mut.Lock()
-		defer c.mut.Unlock()
-		if len := len(c.in); len != 0 {
-			buffer := make([]*Entry, 0, len)
-			for i := 0; i < len; i++ {
-				buffer[i] = readOrReturn(c.in)
-			}
-			grouped, err := Group(buffer)
-			if err != nil {
-				log.Printf("Error grouping entries: %v", err)
-			}
-			if err := c.Write(ctx, grouped); err != nil {
-				log.Printf("Failed to write entries: %v", err)
-			}
-		}
-	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			c.closed = true
-			flush()
+			c.Flush(ctx)
 			return
 		case <-tick:
-			flush()
+			c.Flush(ctx)
 		case <-c.notify:
-			flush()
+			c.Flush(ctx)
 		}
 	}
 }
 
 func (c *Client) Flush(ctx context.Context) error {
-	select {
-	case c.notify <- true:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	c.mut.Lock()
+	defer c.mut.Unlock()
+	if len := len(c.in); len != 0 {
+		buffer := make([]*Entry, 0, len)
+		for i := 0; i < len; i++ {
+			buffer[i] = readOrReturn(c.in)
+		}
+		grouped, err := Group(buffer)
+		if err != nil {
+			return fmt.Errorf("error grouping entries: %v", err)
+		}
+		if err := c.Write(ctx, grouped); err != nil {
+			return fmt.Errorf("failed to write entries: %v", err)
+		}
 	}
+	return nil
 }
 
 func Group(entries []*Entry) ([]*Entry, error) {
