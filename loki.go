@@ -44,7 +44,7 @@ type (
 		notify     chan bool
 		wg         sync.WaitGroup
 		mut        sync.Mutex
-		closed     bool
+		drain      bool
 	}
 	WriterOption func(*ClientConfig)
 	LogLevel     int
@@ -160,7 +160,7 @@ func (c *Client) SetHttpClient(client *http.Client) {
 }
 
 func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
-	if c.closed {
+	if c.drain {
 		return
 	}
 	if level < c.config.LogLevel {
@@ -276,7 +276,7 @@ func (c *Client) syncWorker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			c.closed = true
+			c.drain = true
 			c.Flush(ctx)
 			return
 		case <-tick:
