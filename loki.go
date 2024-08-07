@@ -132,7 +132,7 @@ func (c *Client) Write(e []*Entry) error {
 	var errs error
 	for i := 0; i <= c.maxRetries; i++ {
 		if err := c.send(e); err != nil {
-			errors.Join(err)
+			errs = errors.Join(err)
 			<-time.After(c.retryInterval)
 			continue
 		}
@@ -140,7 +140,7 @@ func (c *Client) Write(e []*Entry) error {
 	}
 	for _, fallback := range c.fallbacks {
 		if err := fallback.Write(e); err != nil {
-			errors.Join(err)
+			errs = errors.Join(err)
 			continue
 		}
 		return nil
