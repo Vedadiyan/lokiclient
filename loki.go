@@ -276,9 +276,9 @@ func (c *Client) syncWorker(ctx context.Context) {
 		c.mut.Lock()
 		defer c.mut.Unlock()
 		if len := len(c.in); len != 0 {
-			buffer := make([]*Entry, 0)
+			buffer := make([]*Entry, 0, len)
 			for i := 0; i < len; i++ {
-				buffer = append(buffer, readOrReturn(c.in))
+				buffer[i] = readOrReturn(c.in)
 			}
 			grouped, err := Group(buffer)
 			if err != nil {
