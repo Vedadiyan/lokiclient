@@ -51,11 +51,11 @@ type (
 )
 
 const (
-	TraceLevel LogLevel = iota
-	DebugLevel
-	InfoLevel
-	WarnLevel
-	ErrorLevel
+	TRACE LogLevel = iota
+	DEBUG
+	INFO
+	WARN
+	ERROR
 )
 
 const (
@@ -134,7 +134,7 @@ func newEntry(stream Stream, value Value) *Entry {
 
 func NewClient(addr string, options ...WriterOption) *Client {
 	config := new(ClientConfig)
-	config.LogLevel = InfoLevel
+	config.LogLevel = INFO
 	config.MinBatchSize = 1
 	config.ChannelBufferSize = config.MinBatchSize * 5
 	config.HttpTimeout = 30 * time.Second
@@ -187,23 +187,23 @@ func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
 }
 
 func (c *Client) Trace(ctx context.Context, s Stream, v Value) {
-	c.log(ctx, TraceLevel, s, v)
+	c.log(ctx, TRACE, s, v)
 }
 
 func (c *Client) Debug(ctx context.Context, s Stream, v Value) {
-	c.log(ctx, DebugLevel, s, v)
+	c.log(ctx, DEBUG, s, v)
 }
 
 func (c *Client) Info(ctx context.Context, s Stream, v Value) {
-	c.log(ctx, InfoLevel, s, v)
+	c.log(ctx, INFO, s, v)
 }
 
 func (c *Client) Warn(ctx context.Context, s Stream, v Value) {
-	c.log(ctx, WarnLevel, s, v)
+	c.log(ctx, WARN, s, v)
 }
 
 func (c *Client) Error(ctx context.Context, s Stream, v Value) {
-	c.log(ctx, ErrorLevel, s, v)
+	c.log(ctx, ERROR, s, v)
 }
 
 func (c *Client) Write(ctx context.Context, entries []*Entry) error {
@@ -336,15 +336,15 @@ func Group(entries []*Entry) ([]*Entry, error) {
 
 func (l LogLevel) String() string {
 	switch l {
-	case TraceLevel:
+	case TRACE:
 		return "TRACE"
-	case DebugLevel:
+	case DEBUG:
 		return "DEBUG"
-	case InfoLevel:
+	case INFO:
 		return "INFO"
-	case WarnLevel:
+	case WARN:
 		return "WARN"
-	case ErrorLevel:
+	case ERROR:
 		return "ERROR"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", l)
