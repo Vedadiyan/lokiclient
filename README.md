@@ -234,5 +234,3 @@ if err != nil {
     // Handle error
 }
 ```
-
-This documentation covers the main features and usage of your Grafana Loki client. Let me know if you need any clarification or additional information on any part of the documentation.
