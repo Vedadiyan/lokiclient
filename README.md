@@ -29,10 +29,8 @@ This Go package provides a client for Grafana Loki, a horizontally-scalable, hig
 To install the Loki client, use the following go get command:
 
 ```
-go get github.com/yourusername/lokiclient
+go get github.com/vedadiyan/lokiclient
 ```
-
-Replace `yourusername` with the actual path to the package.
 
 ## Quick Start
 
