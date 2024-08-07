@@ -43,6 +43,7 @@ type (
 		in         chan *Entry
 		notify     chan bool
 		wg         sync.WaitGroup
+		closed     bool
 	}
 	WriterOption func(*ClientConfig)
 	LogLevel     int
@@ -158,6 +159,9 @@ func (c *Client) SetHttpClient(client *http.Client) {
 }
 
 func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
+	if c.closed {
+		return
+	}
 	if level < c.config.LogLevel {
 		return
 	}
@@ -268,12 +272,11 @@ func (c *Client) syncWorker(ctx context.Context) {
 		defer ticker.Stop()
 	}
 
-	flush := func(len int) {
+	flush := func() {
 		buffer := make([]*Entry, 0)
+		len := len(c.in)
 		for i := 0; i < len; i++ {
-			if e := readOrReturn(c.in); e != nil {
-				buffer = append(buffer, e)
-			}
+			buffer = append(buffer, readOrReturn(c.in))
 		}
 		grouped, err := Group(buffer)
 		if err != nil {
@@ -287,12 +290,13 @@ func (c *Client) syncWorker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			flush(len(c.in))
+			c.closed = true
+			flush()
 			return
 		case <-tick:
-			flush(c.config.BatchSize)
+			flush()
 		case <-c.notify:
-			flush(c.config.BatchSize)
+			flush()
 		}
 	}
 }
