@@ -228,7 +228,7 @@ You can manually write entries using the `Write` method:
 entries := []*lokiclient.Entry{
     {
         Stream: stream,
-        Values: [][]lokiclient.Value{
+        Values: [][]any{
             {fmt.Sprintf("%d", time.Now().UnixNano()), "Message 1"},
             {fmt.Sprintf("%d", time.Now().UnixNano()), "Message 2"},
         },
