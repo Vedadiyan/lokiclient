@@ -39,7 +39,7 @@ type (
 )
 
 var (
-	_defaultClient http.Client
+	_defaultClient *http.Client
 )
 
 func init() {
@@ -47,7 +47,7 @@ func init() {
 	transport.MaxConnsPerHost = 25
 	transport.MaxIdleConns = 5
 	transport.MaxIdleConnsPerHost = 5
-	_defaultClient = http.Client{
+	_defaultClient = &http.Client{
 		Transport: transport,
 	}
 	gob.Register(Stream{})
@@ -281,6 +281,10 @@ func Group(entries []*Entry) []*Entry {
 		out[n].Values = append(out[n].Values, entry.Values...)
 	}
 	return out
+}
+
+func SetHttpClient(c *http.Client) {
+	_defaultClient = c
 }
 
 func consoleWarning(msg string) {
