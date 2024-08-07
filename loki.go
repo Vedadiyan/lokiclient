@@ -59,7 +59,7 @@ const (
 )
 
 const (
-	ErrSendFailed SendErr = "failed to send log entries"
+	ERR_SEND_FAILED SendErr = "failed to send log entries"
 )
 
 func (e SendErr) Error() string {
@@ -229,7 +229,7 @@ func (c *Client) Write(ctx context.Context, entries []*Entry) error {
 		return nil
 	}
 
-	return fmt.Errorf("%w: %v", ErrSendFailed, errs)
+	return fmt.Errorf("%w: %v", ERR_SEND_FAILED, errs)
 }
 
 func (c *Client) send(ctx context.Context, entries []*Entry) error {
