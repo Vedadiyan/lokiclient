@@ -11,261 +11,311 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strings"
+	"sync"
 	"time"
 )
 
 type (
-	Logger interface {
-		Write([]*Entry) error
+	SendErr string
+	Logger  interface {
+		Write(context.Context, []*Entry) error
 	}
 	Stream map[string]string
-	Value  []any
+	Value  string
 	Entry  struct {
 		Stream Stream  `json:"stream"`
-		Values []Value `json:"values"`
+		Values [][]any `json:"values"`
+	}
+	Entries struct {
+		Streams []*Entry `json:"streams"`
+	}
+	ClientConfig struct {
+		MaxRetries        int
+		RetryInterval     time.Duration
+		MinBatchSize      int
+		SyncInterval      time.Duration
+		ChannelBufferSize int
+		LogLevel          LogLevel
+		HttpTimeout       time.Duration
+		Fallbacks         []Logger
+		HttpClient        *http.Client
 	}
 	Client struct {
-		addr             string
-		maxRetries       int
-		retryInterval    time.Duration
-		in               chan *Entry
-		notify           chan bool
-		fallbacks        []Logger
-		batched          bool
-		syncMinBufferLen int
-		syncInterval     time.Duration
+		addr   string
+		config *ClientConfig
+		in     chan *Entry
+		notify chan bool
+		wg     sync.WaitGroup
+		mut    sync.Mutex
+		drain  bool
 	}
-	WriterOption func(*Client)
+	WriterOption func(*ClientConfig)
+	LogLevel     int
 )
 
-var (
-	_defaultClient *http.Client
+const (
+	TRACE LogLevel = iota
+	DEBUG
+	INFO
+	WARN
+	ERROR
 )
+
+const (
+	ERR_SEND_FAILED SendErr = "failed to send log entries"
+)
+
+func (e SendErr) Error() string {
+	return string(e)
+}
 
 func init() {
-	transport := http.DefaultTransport.(*http.Transport)
-	transport.MaxConnsPerHost = 25
-	transport.MaxIdleConns = 5
-	transport.MaxIdleConnsPerHost = 5
-	_defaultClient = &http.Client{
-		Transport: transport,
-	}
 	gob.Register(Stream{})
 }
 
 func WithRetry(max int, pause time.Duration) WriterOption {
-	return func(c *Client) {
-		c.maxRetries = max
-		c.retryInterval = pause
+	return func(c *ClientConfig) {
+		c.MaxRetries = max
+		c.RetryInterval = pause
 	}
 }
 
-func WithBatchSync(minBufferLen int, interval time.Duration) WriterOption {
-	return func(c *Client) {
-		c.batched = true
-		c.syncMinBufferLen = minBufferLen
-		c.syncInterval = interval
+func WithBatchSync(minBatchSize int, interval time.Duration) WriterOption {
+	return func(c *ClientConfig) {
+		c.MinBatchSize = minBatchSize
+		c.SyncInterval = interval
+		c.ChannelBufferSize = minBatchSize * 5
 	}
 }
 
-func WithFallback(l Logger) WriterOption {
-	return func(c *Client) {
-		c.fallbacks = append(c.fallbacks, l)
+func WithLogLevel(level LogLevel) WriterOption {
+	return func(c *ClientConfig) {
+		c.LogLevel = level
 	}
 }
 
-func NewStream(app string, module string, function string, traceId string) Stream {
-	m := make(map[string]string)
-	m["app"] = app
-	m["mod"] = module
-	m["func"] = function
-	m["traceId"] = traceId
-	return m
+func WithChannelBufferSize(size int) WriterOption {
+	return func(c *ClientConfig) {
+		c.ChannelBufferSize = size
+	}
+}
+
+func WithFallback(loggers ...Logger) WriterOption {
+	return func(c *ClientConfig) {
+		c.Fallbacks = append(c.Fallbacks, loggers...)
+	}
+}
+
+func WithHttpTimeout(timeout time.Duration) WriterOption {
+	return func(c *ClientConfig) {
+		c.HttpTimeout = timeout
+	}
+}
+
+func WithHttpClient(client *http.Client) WriterOption {
+	return func(c *ClientConfig) {
+		c.HttpClient = client
+	}
+}
+
+func NewStream(app, module, function, traceId string) Stream {
+	return Stream{
+		"app":     app,
+		"mod":     module,
+		"func":    function,
+		"traceId": traceId,
+	}
 }
 
 func NewStreamCustom(m map[string]string) Stream {
-	return m
-}
-
-func NewValue(params ...any) Value {
-	values := make([]any, 0)
-	values = append(values, params...)
-	return values
+	return Stream(m)
 }
 
 func newEntry(stream Stream, value Value) *Entry {
-	entry := new(Entry)
-	entry.Stream = stream
-	entry.Values = []Value{value}
-	return entry
+	return &Entry{
+		Stream: stream,
+		Values: [][]any{{fmt.Sprintf("%d", time.Now().UnixNano()), value}},
+	}
 }
 
-func NewClient(addr string) *Client {
-	c := new(Client)
-	c.addr = fmt.Sprintf("%s/loki/api/v1/push", strings.TrimRight(addr, "/"))
-	c.in = make(chan *Entry, 1000)
-	c.notify = make(chan bool, 100)
-	c.fallbacks = make([]Logger, 0)
+func NewClient(addr string, options ...WriterOption) *Client {
+	config := new(ClientConfig)
+	config.LogLevel = INFO
+	config.MinBatchSize = 1
+	config.ChannelBufferSize = config.MinBatchSize * 5
+	config.HttpClient = http.DefaultClient
+	config.HttpTimeout = 30 * time.Second
+	config.HttpClient.Timeout = config.HttpTimeout
+	config.Fallbacks = make([]Logger, 0)
+
+	for _, option := range options {
+		option(config)
+	}
+
+	c := &Client{
+		config: config,
+		addr:   addr,
+		in:     make(chan *Entry, config.ChannelBufferSize),
+		notify: make(chan bool, 100),
+	}
+
 	return c
 }
 
-func (c *Client) Trace(s Stream, v Value) {
-	c.log("TRACE", s, v)
+func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
+	if c.drain {
+		return
+	}
+	if level < c.config.LogLevel {
+		return
+	}
+	copy := copy(s)
+	copy["level"] = level.String()
+	e := newEntry(copy, v)
+
+	select {
+	case c.in <- e:
+		if len(c.in) >= c.config.MinBatchSize {
+			select {
+			case c.notify <- true:
+			default:
+			}
+		}
+	case <-ctx.Done():
+		log.Printf("Context cancelled while logging: %v", ctx.Err())
+	}
 }
 
-func (c *Client) Debug(s Stream, v Value) {
-	c.log("DEBUG", s, v)
+func (c *Client) Trace(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, TRACE, s, v)
 }
 
-func (c *Client) Info(s Stream, v Value) {
-	c.log("INFO", s, v)
+func (c *Client) Debug(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, DEBUG, s, v)
 }
 
-func (c *Client) Warn(s Stream, v Value) {
-	c.log("WARN", s, v)
+func (c *Client) Info(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, INFO, s, v)
 }
 
-func (c *Client) Error(s Stream, v Value) {
-	c.log("ERROR", s, v)
+func (c *Client) Warn(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, WARN, s, v)
 }
 
-func (c *Client) Write(e []*Entry) error {
+func (c *Client) Error(ctx context.Context, s Stream, v Value) {
+	c.log(ctx, ERROR, s, v)
+}
+
+func (c *Client) Write(ctx context.Context, entries []*Entry) error {
 	var errs error
-	for i := 0; i <= c.maxRetries; i++ {
-		if err := c.send(e); err != nil {
-			errs = errors.Join(err)
-			<-time.After(c.retryInterval)
-			continue
-		}
-		if errs != nil {
-			consoleWarning(errs.Error())
-		}
-		return nil
-	}
-	for _, fallback := range c.fallbacks {
-		if err := fallback.Write(e); err != nil {
-			errs = errors.Join(err)
-			continue
-		}
-		if errs != nil {
-			consoleWarning(errs.Error())
+	for i := 0; i <= c.config.MaxRetries; i++ {
+		if err := c.send(ctx, entries); err != nil {
+			errs = errors.Join(errs, err)
+			select {
+			case <-time.After(c.config.RetryInterval):
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		return nil
 	}
-	return errs
+
+	for _, fallback := range c.config.Fallbacks {
+		if err := fallback.Write(ctx, entries); err != nil {
+			errs = errors.Join(errs, err)
+			continue
+		}
+		return nil
+	}
+
+	return fmt.Errorf("%w: %v", ERR_SEND_FAILED, errs)
+}
+
+func (c *Client) send(ctx context.Context, entries []*Entry) error {
+	data, err := json.Marshal(Entries{Streams: entries})
+	if err != nil {
+		return fmt.Errorf("failed to marshal entries: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.addr, bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := c.config.HttpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode/100 != 2 {
+		body, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("unexpected status code: %s, body: %s", res.Status, string(body))
+	}
+
+	return nil
 }
 
 func (c *Client) Sync(ctx context.Context) {
-	if !c.batched {
-		go c.simpleSync(ctx)
-		return
-	}
-	go c.batchSync(ctx)
+	c.wg.Add(1)
+	go c.syncWorker(ctx)
 }
 
-func (c *Client) send(e []*Entry) error {
-	data, err := json.Marshal(e)
-	if err != nil {
-		return err
+func (c *Client) syncWorker(ctx context.Context) {
+	defer c.wg.Done()
+
+	tick := make(<-chan time.Time)
+	if c.config.SyncInterval > 0 {
+		ticker := time.NewTicker(c.config.SyncInterval)
+		tick = ticker.C
+		defer ticker.Stop()
 	}
-	res, err := _defaultClient.Post(c.addr, "application/json", bytes.NewBuffer(data))
-	if err != nil {
-		return err
+
+	for {
+		select {
+		case <-ctx.Done():
+			c.drain = true
+			c.Flush(ctx)
+			return
+		case <-tick:
+			c.Flush(ctx)
+		case <-c.notify:
+			c.Flush(ctx)
+		}
 	}
-	if res.StatusCode/200 != 2 {
-		data, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("%s: %s", res.Status, string(data))
+}
+
+func (c *Client) Flush(ctx context.Context) error {
+	c.mut.Lock()
+	defer c.mut.Unlock()
+	if len := len(c.in); len != 0 {
+		buffer := make([]*Entry, len)
+		for i := 0; i < len; i++ {
+			buffer[i] = readOrReturn(c.in)
+		}
+		grouped, err := Group(buffer)
+		if err != nil {
+			return fmt.Errorf("error grouping entries: %v", err)
+		}
+		if err := c.Write(ctx, grouped); err != nil {
+			return fmt.Errorf("failed to write entries: %v", err)
+		}
 	}
 	return nil
 }
 
-func (c *Client) log(l string, s Stream, v Value) {
-	values := make([]any, 0)
-	values = append(values, time.Now().UnixNano())
-	values = append(values, l)
-	values = append(values, v...)
-	e := newEntry(s, values)
-	c.in <- e
-	if len(c.in) >= c.syncMinBufferLen {
-		c.notify <- true
-	}
-}
-
-func (c *Client) simpleSync(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			{
-				return
-			}
-		case e := <-c.in:
-			{
-				go c.Write([]*Entry{e})
-			}
-		}
-	}
-}
-
-func (c *Client) batchSync(ctx context.Context) {
-	ticker := time.NewTicker(c.syncInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			{
-				return
-			}
-		case <-ticker.C:
-			{
-				l := len(c.in)
-				if l <= c.syncMinBufferLen {
-					continue
-				}
-				entries := make([]*Entry, 0)
-				for i := 0; i < l; i++ {
-					if e := readOrReturn(c.in); e != nil {
-						entries = append(entries, e)
-					}
-				}
-				go c.Write(Group(entries))
-			}
-		case <-c.notify:
-			{
-				entries := make([]*Entry, 0)
-				for i := 0; i < c.syncMinBufferLen; i++ {
-					if e := readOrReturn(c.in); e != nil {
-						entries = append(entries, e)
-					}
-				}
-				go c.Write(Group(entries))
-			}
-		}
-	}
-}
-
-// Extra non-blocking measure
-// Not really needed, I know
-func readOrReturn(in chan *Entry) *Entry {
-	select {
-	case out := <-in:
-		{
-			return out
-		}
-	default:
-		{
-			return nil
-		}
-	}
-}
-
-func Group(entries []*Entry) []*Entry {
+func Group(entries []*Entry) ([]*Entry, error) {
 	out := make([]*Entry, 0)
 	g := make(map[string]int)
+	var errs error
 	for _, entry := range entries {
 		var buffer bytes.Buffer
 		enc := gob.NewEncoder(&buffer)
 		err := enc.Encode(entry.Stream)
 		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to encode entry: %w", err))
 			continue
 		}
 		key := hex.EncodeToString(buffer.Bytes())
@@ -281,13 +331,39 @@ func Group(entries []*Entry) []*Entry {
 		}
 		out[n].Values = append(out[n].Values, entry.Values...)
 	}
+	return out, errs
+}
+
+func (l LogLevel) String() string {
+	switch l {
+	case TRACE:
+		return "TRACE"
+	case DEBUG:
+		return "DEBUG"
+	case INFO:
+		return "INFO"
+	case WARN:
+		return "WARN"
+	case ERROR:
+		return "ERROR"
+	default:
+		return fmt.Sprintf("UNKNOWN(%d)", l)
+	}
+}
+
+func readOrReturn(in chan *Entry) *Entry {
+	select {
+	case out := <-in:
+		return out
+	default:
+		return nil
+	}
+}
+
+func copy(m map[string]string) map[string]string {
+	out := make(map[string]string)
+	for key, value := range m {
+		out[key] = value
+	}
 	return out
-}
-
-func SetHttpClient(c *http.Client) {
-	_defaultClient = c
-}
-
-func consoleWarning(msg string) {
-	log.Println("\033[31m", "WARNING:", msg, "\033[0m")
 }
