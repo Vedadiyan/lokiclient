@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -102,7 +103,7 @@ func newEntry(stream Stream, value Value) *Entry {
 
 func NewClient(addr string) *Client {
 	c := new(Client)
-	c.addr = addr
+	c.addr = fmt.Sprintf("%s/loki/api/v1/push", strings.TrimRight(addr, "/"))
 	c.in = make(chan *Entry, 1000)
 	c.notify = make(chan bool, 100)
 	c.fallbacks = make([]Logger, 0)
