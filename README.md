@@ -51,7 +51,7 @@ func main() {
     stream := lokiclient.NewStream("myapp", "module1", "function1", "trace123")
     value := lokiclient.NewValue("This is a log message", "item1", "item2")
     
-    client.Info(stream, value)
+    client.Info(context.Background(), stream, value)
     
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
@@ -139,20 +139,47 @@ lokiclient.WithFallback(myFallbackLogger)
 
 This adds a fallback logger to use if sending to Loki fails.
 
+#### WithLogLevel
+
+Add log level:
+
+```go
+lokiclient.WithLogLevel(lokiclient.ERROR)
+```
+
+#### WithLogLevel
+
+Add http timeout:
+
+```go
+lokiclient.WithHttpTimeout(time.Second * 10)
+```
+
+#### WithHttpClient
+
+You can customize the HTTP client used by the Loki client:
+
+```go
+customHttpClient := &http.Client{
+    Timeout: 10 * time.Second,
+}
+lokiclient.WithHttpClient(customHttpClient)
+```
+
 ## Logging Methods
 
 The client provides methods for different log levels:
 
-- `Trace(stream Stream, value Value)`
-- `Debug(stream Stream, value Value)`
-- `Info(stream Stream, value Value)`
-- `Warn(stream Stream, value Value)`
-- `Error(stream Stream, value Value)`
+- `Trace(ctx context.Context, stream Stream, value Value)`
+- `Debug(ctx context.Context, stream Stream, value Value)`
+- `Info(ctx context.Context, stream Stream, value Value)`
+- `Warn(ctx context.Context, stream Stream, value Value)`
+- `Error(ctx context.Context, stream Stream, value Value)`
 
 Example:
 
 ```go
-client.Info(stream, lokiclient.NewValue("User logged in", "userId", 12345))
+client.Info(context.Background(), stream, lokiclient.NewValue("User logged in", "userId", 12345))
 ```
 
 ## Synchronization
@@ -186,19 +213,7 @@ The client automatically retries failed requests based on the configured retry s
 Fallback loggers are used when the client fails to send logs to Loki after all retries. You can add multiple fallback loggers:
 
 ```go
-client.WithFallback(consoleLogger)
-client.WithFallback(fileLogger)
-```
-
-## HTTP Client Customization
-
-You can customize the HTTP client used by the Loki client:
-
-```go
-customHttpClient := &http.Client{
-    Timeout: 10 * time.Second,
-}
-lokiclient.SetHttpClient(customHttpClient)
+lockiclient.WithFallback(consoleLogger, fileLogger)
 ```
 
 ## Advanced Usage
