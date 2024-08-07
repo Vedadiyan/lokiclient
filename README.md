@@ -7,7 +7,6 @@
 3. [Quick Start](#quick-start)
 4. [Core Concepts](#core-concepts)
    - [Stream](#stream)
-   - [Value](#value)
    - [Entry](#entry)
 5. [Client Configuration](#client-configuration)
    - [Creating a New Client](#creating-a-new-client)
@@ -49,9 +48,8 @@ func main() {
     client := lokiclient.NewClient("http://loki:3100")
     
     stream := lokiclient.NewStream("myapp", "module1", "function1", "trace123")
-    value := lokiclient.NewValue("This is a log message", "item1", "item2")
-    
-    client.Info(context.Background(), stream, value)
+   
+    client.Info(context.Background(), stream, "log message")
     
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
@@ -81,14 +79,6 @@ customStream := lokiclient.NewStreamCustom(map[string]string{
     "environment": "production",
     "server": "server01",
 })
-```
-
-### Value
-
-A `Value` represents the actual log data. It's implemented as a slice of `interface{}`.
-
-```go
-value := lokiclient.NewValue("Log message", "item1", "item2")
 ```
 
 ### Entry
