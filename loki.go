@@ -274,6 +274,9 @@ func (c *Client) syncWorker(ctx context.Context) {
 	}
 
 	flush := func() {
+		if c.syncing {
+			return
+		}
 		c.syncing = true
 		buffer := make([]*Entry, 0)
 		len := len(c.in)
