@@ -174,8 +174,7 @@ The client supports batching of log entries for improved performance. When batch
 To enable batching:
 
 ```go
-client := lokiclient.NewClient("http://loki:3100/loki/api/v1/push")
-client.WithBatchSync(100, 5*time.Second)
+client := lokiclient.NewClient("http://loki:3100/loki/api/v1/push", client.WithBatchSync(100, 5*time.Second))
 ```
 
 ## Error Handling and Retries
