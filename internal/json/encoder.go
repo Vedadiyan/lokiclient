@@ -1,3 +1,8 @@
+/*
+This custom JSON encoder is designed to handle
+circular loops, and it does not require any error
+handling.
+*/
 package json
 
 import (
