@@ -169,7 +169,7 @@ func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
 	if level < c.config.LogLevel {
 		return
 	}
-	copy := copy(s)
+	copy := CopyStream(s)
 	copy["level"] = level.String()
 	e := newEntry(copy, v)
 
@@ -380,7 +380,7 @@ func readOrReturn(in chan *Entry) *Entry {
 	}
 }
 
-func copy(m map[string]string) map[string]string {
+func CopyStream(m map[string]string) map[string]string {
 	out := make(map[string]string)
 	for key, value := range m {
 		out[key] = value
