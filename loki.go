@@ -186,6 +186,27 @@ func (c *Client) log(ctx context.Context, level LogLevel, s Stream, v Value) {
 	}
 }
 
+func (c *Client) Log(ctx context.Context, s Stream, v Value) {
+	if c.drain {
+		return
+	}
+
+	copy := copy(s)
+	e := newEntry(copy, v)
+
+	select {
+	case c.in <- e:
+		if len(c.in) >= c.config.MinBatchSize {
+			select {
+			case c.notify <- true:
+			default:
+			}
+		}
+	case <-ctx.Done():
+		log.Printf("Context cancelled while logging: %v", ctx.Err())
+	}
+}
+
 func (c *Client) Trace(ctx context.Context, s Stream, v Value) {
 	c.log(ctx, TRACE, s, v)
 }
