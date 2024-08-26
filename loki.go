@@ -191,8 +191,7 @@ func (c *Client) Log(ctx context.Context, s Stream, v Value) {
 		return
 	}
 
-	copy := copy(s)
-	e := newEntry(copy, v)
+	e := newEntry(s, v)
 
 	select {
 	case c.in <- e:
